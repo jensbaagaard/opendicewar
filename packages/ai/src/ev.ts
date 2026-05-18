@@ -6,7 +6,7 @@
  * Computed once on module load via convolution of d6 distributions; cheap.
  */
 
-const MAX = 8;
+const MAX = 16;
 
 function d6Distribution(n: number): Map<number, number> {
   if (n === 0) return new Map([[0, 1]]);

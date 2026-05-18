@@ -6,6 +6,8 @@
 export const DIE_SIZE = 16; // front face edge length in px
 export const DIE_DEPTH = 6; // isometric offset
 export const DIE_STACK_GAP = 2; // visible gap between stacked dice
+export const DICE_PER_STACK = 8; // dice cap before overflow into a side stack
+export const DIE_COLUMN_GAP = 2; // horizontal gap between side-by-side stacks
 
 const PIP_POSITIONS: Array<[number, number]> = [
   [0.25, 0.25], // 0 top-left
@@ -139,8 +141,9 @@ function drawPipsOnTop(
 }
 
 /**
- * Draws a vertical stack of `count` dice, centered horizontally at `cx`.
- * Bottom of the stack sits at `by`. Pips are only shown on the very top die.
+ * Draws `count` dice as side-by-side stacks, each holding at most
+ * DICE_PER_STACK dice. Stacks are centered horizontally at `cx`; the bottom
+ * sits at `by`. Pips are only shown on the top die of each stack.
  */
 export function drawDiceStack(
   ctx: CanvasRenderingContext2D,
@@ -152,21 +155,43 @@ export function drawDiceStack(
   depth = DIE_DEPTH,
 ) {
   if (count <= 0) return;
-  // Ground shadow under the stack.
+
+  const columns: number[] = [];
+  let remaining = count;
+  while (remaining > 0) {
+    const take = Math.min(remaining, DICE_PER_STACK);
+    columns.push(take);
+    remaining -= take;
+  }
+
+  const totalWidth = columns.length * size + (columns.length - 1) * DIE_COLUMN_GAP;
+  const leftBx = cx - totalWidth / 2;
+
+  // Ground shadow spanning all columns — two stacked ellipses fake a soft falloff.
   ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.38)";
+  const shadowCx = leftBx + totalWidth / 2 + depth * 0.25 + 2;
+  const shadowCy = by + 4 - 5;
+  const shadowRx = totalWidth / 2 + size * 0.22;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
   ctx.beginPath();
-  ctx.ellipse(cx + depth * 0.4, by + 2, size * 0.65, 3.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(shadowCx, shadowCy, shadowRx, 4.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
+  ctx.beginPath();
+  ctx.ellipse(shadowCx, shadowCy, shadowRx * 0.66, 2.8, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  const bx = cx - size / 2;
   const stride = size + DIE_STACK_GAP;
-  // Bottom die first, then upwards.
-  for (let i = 0; i < count; i++) {
-    const dieBy = by - i * stride;
-    const isTop = i === count - 1;
-    drawDie3D(ctx, bx, dieBy, size, color, isTop ? 1 : 0, 0);
+  // Left column first so the right column overlaps in front in the iso projection.
+  let bx = leftBx;
+  for (const colCount of columns) {
+    for (let i = 0; i < colCount; i++) {
+      const dieBy = by - i * stride;
+      const isTop = i === colCount - 1;
+      drawDie3D(ctx, bx, dieBy, size, color, isTop ? 1 : 0, 0);
+    }
+    bx += size + DIE_COLUMN_GAP;
   }
 }
 

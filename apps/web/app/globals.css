@@ -117,6 +117,59 @@ a { color: var(--accent); }
   cursor: not-allowed;
 }
 
+.board-wrap {
+  position: relative;
+  display: inline-block;
+}
+.begin-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(1px);
+  border-radius: 8px;
+  cursor: not-allowed;
+}
+.begin-btn {
+  font-size: 1.5rem;
+  padding: 14px 36px;
+  letter-spacing: 0.12em;
+  background: #1a1a1a;
+  color: #fff;
+  border-color: #1a1a1a;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+}
+.begin-btn:hover { background: #333; }
+
+.history-bar {
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.history-bar .btn.small { padding: 2px 8px; }
+.history-slider { flex: 1; min-width: 120px; }
+.history-label {
+  min-width: 180px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.viewing-history {
+  color: #c33;
+  font-weight: 600;
+  margin-left: 6px;
+}
+
 .play-controls {
   display: flex;
   gap: 12px;

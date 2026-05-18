@@ -36,7 +36,7 @@ export interface BoardProps {
   onAnimationComplete?: () => void;
 }
 
-const HEX_SIZE = 22;
+const HEX_SIZE = 16;
 const PADDING = 28;
 
 const SHAKE_MS = 380;

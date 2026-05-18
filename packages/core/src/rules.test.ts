@@ -20,7 +20,7 @@ describe("rules", () => {
     const g = newGame({ seed: 1, playerCount: 2, territoryCount: 8 });
     const next = applyEndTurn(g);
     expect(next.turn).toBe(1);
-    expect(next.currentPlayer).toBe(1);
+    expect(next.currentPlayer).toBe((g.currentPlayer + 1) % 2);
   });
 
   it("returns at least one legal attack from a fresh board", () => {
@@ -32,5 +32,32 @@ describe("rules", () => {
     const a = newGame({ seed: 42, playerCount: 4, territoryCount: 16 });
     const b = newGame({ seed: 42, playerCount: 4, territoryCount: 16 });
     expect(a).toEqual(b);
+  });
+
+  it("produces a connected territory adjacency graph", () => {
+    // Sweep a range of seeds to be confident the bridge step holds up.
+    for (let seed = 1; seed <= 25; seed++) {
+      const g = newGame({
+        seed,
+        playerCount: 7,
+        territoryCount: 32,
+        gridWidth: 32,
+        gridHeight: 32,
+        cellsPerTerritory: 24,
+      });
+      // BFS on the territory adjacency graph.
+      const visited = new Set<number>([0]);
+      const stack = [0];
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        for (const n of g.territories[cur]!.neighbors) {
+          if (!visited.has(n)) {
+            visited.add(n);
+            stack.push(n);
+          }
+        }
+      }
+      expect(visited.size).toBe(g.territories.length);
+    }
   });
 });

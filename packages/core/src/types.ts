@@ -45,6 +45,7 @@ export type Action =
 
 export interface AttackAction {
   kind: "attack";
+  player: PlayerId;
   from: TerritoryId;
   to: TerritoryId;
   rolls: { atk: number[]; def: number[] };
@@ -63,5 +64,5 @@ export interface ReinforceAction {
   stockDelta: number;
 }
 
-export const MAX_DICE_PER_TERRITORY = 8;
+export const MAX_DICE_PER_TERRITORY = 16;
 export const MAX_STOCK = 64;

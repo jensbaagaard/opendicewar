@@ -29,6 +29,7 @@ export function applyAttack(state: GameState, from: TerritoryId, to: TerritoryId
   const rng = rngFromState(next.rngState);
   const src = next.territories[from]!;
   const dst = next.territories[to]!;
+  const attacker = src.owner;
 
   const atkRolls = rollMany(rng, src.dice);
   const defRolls = rollMany(rng, dst.dice);
@@ -52,6 +53,7 @@ export function applyAttack(state: GameState, from: TerritoryId, to: TerritoryId
 
   const action: AttackAction = {
     kind: "attack",
+    player: attacker,
     from,
     to,
     rolls: { atk: atkRolls, def: defRolls },

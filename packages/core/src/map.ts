@@ -11,11 +11,11 @@ import {
 } from "./types";
 
 const DEFAULT_COLORS = [
+  "#8e44ad", // purple (player 0 / human)
   "#5da9e9", // cyan/blue
   "#3f8e3f", // dark green
   "#f1c40f", // yellow
   "#7bc950", // light green
-  "#8e44ad", // purple
   "#e67e22", // orange
   "#e91e63", // pink
   "#1abc9c", // teal
@@ -69,7 +69,7 @@ export function newGame(opts: NewGameOptions): GameState {
     seed: opts.seed,
     rngState: rng.state,
     turn: 0,
-    currentPlayer: 0,
+    currentPlayer: rng.int(playerCount),
     phase: "attack",
     cells: map.cells,
     territories: map.territories,
@@ -159,6 +159,9 @@ function generateMap(rng: Rng, opts: GenOpts): MapData {
       }
     }
   }
+
+  // 3.5. Bridge any disconnected territory components so the game can always finish.
+  ensureTerritoryConnectivity(grid, wanted);
 
   // 4. Drop unclaimed cells; collect territory members.
   const cellsByTerritory: Map<TerritoryId, CellId[]> = new Map();
@@ -255,4 +258,108 @@ function distributeStartingDice(
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+type GridCell = { q: number; r: number; id: CellId; territory: TerritoryId };
+
+/**
+ * Bridges any disconnected territory components by claiming unclaimed cells
+ * along the shortest path between components. Mutates `grid` in place.
+ */
+function ensureTerritoryConnectivity(grid: Map<string, GridCell>, territoryCount: number): void {
+  const MAX_BRIDGES = territoryCount; // hard guard against infinite loops
+  for (let iter = 0; iter < MAX_BRIDGES; iter++) {
+    const components = findTerritoryComponents(grid, territoryCount);
+    if (components.length <= 1) return;
+    const bridge = findShortestBridge(grid, components[0]!);
+    if (!bridge) return; // no path of unclaimed cells exists — can't fix
+    for (const cellKey of bridge.path) {
+      const cell = grid.get(cellKey)!;
+      cell.territory = bridge.sourceTerritory;
+    }
+  }
+}
+
+function findTerritoryComponents(
+  grid: Map<string, GridCell>,
+  territoryCount: number,
+): Set<TerritoryId>[] {
+  const adj: Set<TerritoryId>[] = Array.from({ length: territoryCount }, () => new Set<TerritoryId>());
+  const exists = new Set<TerritoryId>();
+  for (const cell of grid.values()) {
+    if (cell.territory === -1) continue;
+    exists.add(cell.territory);
+    for (const d of HEX_DIRS) {
+      const n = grid.get(axialKey(cell.q + d.q, cell.r + d.r));
+      if (!n || n.territory === -1 || n.territory === cell.territory) continue;
+      adj[cell.territory]!.add(n.territory);
+    }
+  }
+  const components: Set<TerritoryId>[] = [];
+  const visited = new Set<TerritoryId>();
+  for (const t of exists) {
+    if (visited.has(t)) continue;
+    const comp = new Set<TerritoryId>();
+    const stack = [t];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      comp.add(cur);
+      for (const nb of adj[cur]!) if (!visited.has(nb)) stack.push(nb);
+    }
+    components.push(comp);
+  }
+  return components;
+}
+
+/**
+ * BFS from every cell of `sourceComponent` through unclaimed cells, looking
+ * for the nearest cell of a different component. Returns the path of unclaimed
+ * cells to claim (excluding endpoints), plus the source territory to assign
+ * them to.
+ */
+function findShortestBridge(
+  grid: Map<string, GridCell>,
+  sourceComponent: Set<TerritoryId>,
+): { path: string[]; sourceTerritory: TerritoryId } | null {
+  interface Node {
+    key: string;
+    sourceTerritory: TerritoryId;
+    parent: Node | null;
+  }
+  const queue: Node[] = [];
+  const visited = new Set<string>();
+  for (const cell of grid.values()) {
+    if (cell.territory !== -1 && sourceComponent.has(cell.territory)) {
+      const k = axialKey(cell.q, cell.r);
+      queue.push({ key: k, sourceTerritory: cell.territory, parent: null });
+      visited.add(k);
+    }
+  }
+  let head = 0;
+  while (head < queue.length) {
+    const node = queue[head++]!;
+    const cell = grid.get(node.key)!;
+    for (const d of HEX_DIRS) {
+      const nk = axialKey(cell.q + d.q, cell.r + d.r);
+      if (visited.has(nk)) continue;
+      const n = grid.get(nk);
+      if (!n) continue;
+      visited.add(nk);
+      if (n.territory === -1) {
+        queue.push({ key: nk, sourceTerritory: node.sourceTerritory, parent: node });
+      } else if (!sourceComponent.has(n.territory)) {
+        // Reconstruct the path of *unclaimed* cells walked through (skip the source-territory starting node).
+        const path: string[] = [];
+        let cur: Node | null = node;
+        while (cur && cur.parent !== null) {
+          path.push(cur.key);
+          cur = cur.parent;
+        }
+        return { path, sourceTerritory: node.sourceTerritory };
+      }
+    }
+  }
+  return null;
 }
