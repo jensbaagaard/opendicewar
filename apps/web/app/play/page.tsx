@@ -36,7 +36,8 @@ function generateWeights(seed: number, playerCount: number): Array<BlendWeights 
       continue;
     }
     const h = round2(0.15 + rng.next() * 0.7);
-    out.push({ heuristic: h, aggressive: round2(1 - h) });
+    const political = rng.next() < 0.5 ? round2(0.1 + rng.next() * 0.3) : 0;
+    out.push({ heuristic: h, aggressive: round2(1 - h), political });
   }
   return out;
 }

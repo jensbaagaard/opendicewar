@@ -42,11 +42,23 @@ export const HeuristicBot: Agent = {
   },
 };
 
+export const PoliticalBot: Agent = {
+  name: "Political",
+  chooseAction(state) {
+    return blendedChooseAction(state, { heuristic: 1, aggressive: 0, political: 0.25 });
+  },
+};
+
 export interface BlendWeights {
   /** Weight on expected-value scoring (win probability × capture value). */
   heuristic: number;
   /** Weight on raw dice-advantage scoring (src.dice - dst.dice). */
   aggressive: number;
+  /** Strength of leader-targeting bias. Multiplier (not a blend share):
+   *  amplifies captureValue when the target's owner is dominating the board.
+   *  Quadratic in dominance excess, so small leads barely register but a
+   *  player controlling half the map gets heavily targeted even at 0.25. */
+  political?: number;
 }
 
 /** Returns an agent that scores every legal move as a weighted blend of the
@@ -67,6 +79,9 @@ function blendedChooseAction(state: GameState, weights: BlendWeights): AgentActi
   const me = state.currentPlayer;
   const baseConn = largestConnectedSize(state, me);
 
+  const politicalW = weights.political ?? 0;
+  const ownerBonus = politicalW > 0 ? computeOwnerDominanceBonus(state, me) : null;
+
   let best: { from: TerritoryId; to: TerritoryId; score: number } | null = null;
   for (const { from, to } of moves) {
     const src = state.territories[from]!;
@@ -77,7 +92,10 @@ function blendedChooseAction(state: GameState, weights: BlendWeights): AgentActi
     // --- Heuristic signal (EV in dice-equivalent units) ---
     const projectedConn = projectedLargestAfter(state, me, from, to);
     const connGain = projectedConn - baseConn;
-    const captureValue = dst.dice + connGain * 1.2;
+    let captureValue = dst.dice + connGain * 1.2;
+    if (ownerBonus !== null) {
+      captureValue *= 1 + politicalW * ownerBonus[dst.owner]!;
+    }
     const lossCost = src.dice - 1;
     const heuristicScore = winP * captureValue - (1 - winP) * lossCost;
 
@@ -90,6 +108,47 @@ function blendedChooseAction(state: GameState, weights: BlendWeights): AgentActi
 
   if (best === null || best.score <= 0) return { kind: "endTurn" };
   return { kind: "attack", from: best.from, to: best.to };
+}
+
+/** Quadratic-above-fair-share dominance scale. Tuned so a player controlling
+ *  half the map yields a bonus of ~10 (10× captureValue at political=1.0,
+ *  ~3.7× at political=0.25). Near fair share, bonus ≈ 0. */
+const DOMINANCE_K = 100;
+
+/** Returns a per-player additive bonus, indexed by PlayerId. Zero for the
+ *  current player and for dead/non-dominant opponents. */
+function computeOwnerDominanceBonus(state: GameState, me: number): number[] {
+  const N = state.players.length;
+  const terr = new Array<number>(N).fill(0);
+  const dice = new Array<number>(N).fill(0);
+  let totalDice = 0;
+  let totalTerr = 0;
+  for (const t of state.territories) {
+    if (t.owner < 0) continue;
+    terr[t.owner]!++;
+    dice[t.owner]! += t.dice;
+    totalDice += t.dice;
+    totalTerr++;
+  }
+
+  let aliveCount = 0;
+  for (const p of state.players) if (p.alive) aliveCount++;
+  const fairShare = aliveCount > 0 ? 1 / aliveCount : 1;
+  const diceDenom = Math.max(1, totalDice);
+  const terrDenom = Math.max(1, totalTerr);
+
+  const bonus = new Array<number>(N).fill(0);
+  for (const p of state.players) {
+    if (!p.alive || p.id === me) continue;
+    const conn = largestConnectedSize(state, p.id);
+    const dom =
+      0.4 * (terr[p.id]! / terrDenom) +
+      0.35 * (conn / terrDenom) +
+      0.25 * (dice[p.id]! / diceDenom);
+    const excess = Math.max(0, dom - fairShare);
+    bonus[p.id] = excess * excess * DOMINANCE_K;
+  }
+  return bonus;
 }
 
 function projectedLargestAfter(
@@ -127,4 +186,5 @@ export const AGENTS: Record<string, Agent> = {
   random: RandomBot,
   greedy: GreedyBot,
   heuristic: HeuristicBot,
+  political: PoliticalBot,
 };
