@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { makeShards } from "./splashFx";
 
 export interface MatchWonEvent {
   id: number;
@@ -52,7 +53,17 @@ function Splash({ event }: { event: MatchWonEvent }) {
     () => FLAVOR[event.id % FLAVOR.length]!,
     [event.id],
   );
-  const shards = useMemo(() => makeShards(22, event.color), [event.id, event.color]);
+  const shards = useMemo(
+    () =>
+      makeShards(22, event.color, {
+        accentColor: "#ffe082",
+        distanceBase: 160,
+        distanceJitter: 200,
+        delayMax: 100,
+        sizeJitter: 12,
+      }),
+    [event.id, event.color],
+  );
   const [exiting, setExiting] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setExiting(true), SPLASH_MS - 360);
@@ -122,25 +133,3 @@ function Splash({ event }: { event: MatchWonEvent }) {
   );
 }
 
-function makeShards(n: number, color: string) {
-  const palette = [color, "#fff", "#ffd54f", "#ffe082"];
-  const out: Array<{
-    angle: number;
-    distance: number;
-    color: string;
-    delay: number;
-    size: number;
-    round: boolean;
-  }> = [];
-  for (let i = 0; i < n; i++) {
-    out.push({
-      angle: (360 / n) * i + (Math.random() - 0.5) * 12,
-      distance: 160 + Math.random() * 200,
-      color: palette[i % palette.length]!,
-      delay: Math.floor(Math.random() * 100),
-      size: 10 + Math.random() * 12,
-      round: i % 2 === 0,
-    });
-  }
-  return out;
-}

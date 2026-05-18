@@ -218,16 +218,6 @@ export function applyHumanLoss(b: BracketState): BracketState {
   return { ...b, rounds, outcome: "eliminated" };
 }
 
-export function humanWinsCount(b: BracketState): number {
-  let n = 0;
-  for (const round of b.rounds) {
-    for (const m of round) {
-      if (m.winner === HUMAN_CONTESTANT_ID) n++;
-    }
-  }
-  return n;
-}
-
 export function humanOpponent(b: BracketState): Contestant | null {
   const m = findHumanMatch(b);
   if (!m) return null;

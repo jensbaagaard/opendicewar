@@ -90,7 +90,7 @@ function blendedChooseAction(state: GameState, weights: BlendWeights): AgentActi
     const winP = winProbability(src.dice, dst.dice);
 
     // --- Heuristic signal (EV in dice-equivalent units) ---
-    const projectedConn = projectedLargestAfter(state, me, from, to);
+    const projectedConn = projectedLargestAfter(state, me, to);
     const connGain = projectedConn - baseConn;
     let captureValue = dst.dice + connGain * 1.2;
     if (ownerBonus !== null) {
@@ -191,10 +191,8 @@ function computeOwnerDominanceBonus(state: GameState, me: number): number[] {
 function projectedLargestAfter(
   state: GameState,
   player: number,
-  from: TerritoryId,
   to: TerritoryId,
 ): number {
-  void from;
   const owned = new Set<TerritoryId>();
   state.territories.forEach((t, i) => {
     if (t.owner === player || i === to) owned.add(i);
@@ -219,9 +217,3 @@ function projectedLargestAfter(
   return best;
 }
 
-export const AGENTS: Record<string, Agent> = {
-  random: RandomBot,
-  greedy: GreedyBot,
-  heuristic: HeuristicBot,
-  political: PoliticalBot,
-};

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { makeShards } from "./splashFx";
 
 export interface KnockoutEvent {
   id: number;
@@ -47,7 +48,17 @@ function Splash({ event }: { event: KnockoutEvent }) {
       event.isHuman ? "YOU'RE OUT!" : FLAVOR_BOT[event.id % FLAVOR_BOT.length]!,
     [event.id, event.isHuman],
   );
-  const shards = useMemo(() => makeShards(18, event.color), [event.id, event.color]);
+  const shards = useMemo(
+    () =>
+      makeShards(18, event.color, {
+        accentColor: "#ff5252",
+        distanceBase: 140,
+        distanceJitter: 160,
+        delayMax: 80,
+        sizeJitter: 10,
+      }),
+    [event.id, event.color],
+  );
   const [exiting, setExiting] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setExiting(true), SPLASH_MS - 280);
@@ -95,25 +106,3 @@ function Splash({ event }: { event: KnockoutEvent }) {
   );
 }
 
-function makeShards(n: number, color: string) {
-  const palette = [color, "#fff", "#ffd54f", "#ff5252"];
-  const out: Array<{
-    angle: number;
-    distance: number;
-    color: string;
-    delay: number;
-    size: number;
-    round: boolean;
-  }> = [];
-  for (let i = 0; i < n; i++) {
-    out.push({
-      angle: (360 / n) * i + (Math.random() - 0.5) * 12,
-      distance: 140 + Math.random() * 160,
-      color: palette[i % palette.length]!,
-      delay: Math.floor(Math.random() * 80),
-      size: 10 + Math.random() * 10,
-      round: i % 2 === 0,
-    });
-  }
-  return out;
-}

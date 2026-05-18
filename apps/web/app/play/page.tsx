@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Action,
@@ -31,7 +32,6 @@ import {
   ROUND_LABELS,
   applyHumanLoss,
   applyHumanWin,
-  findHumanMatch,
   generateBracket,
   humanOpponent,
 } from "../../components/bracket";
@@ -64,18 +64,19 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+type NavigableAction = Extract<Action, { kind: "attack" | "endTurn" }>;
+
 /**
  * Reinforce actions are recorded but produced as a side effect of applyEndTurn,
  * so they're not replayable on their own. The slider steps over attack + endTurn.
  */
-function isNavigable(a: Action): boolean {
+function isNavigable(a: Action): a is NavigableAction {
   return a.kind === "attack" || a.kind === "endTurn";
 }
 
-function applyNavigable(state: GameState, action: Action): GameState {
+function applyNavigable(state: GameState, action: NavigableAction): GameState {
   if (action.kind === "attack") return applyAttack(state, action.from, action.to);
-  if (action.kind === "endTurn") return applyEndTurn(state);
-  return state;
+  return applyEndTurn(state);
 }
 
 function SeedInput({
@@ -280,7 +281,7 @@ export default function PlayPage() {
     };
   }, [live]);
 
-  const navigableActions = useMemo<Action[]>(
+  const navigableActions = useMemo<NavigableAction[]>(
     () => live.history.filter(isNavigable),
     [live.history],
   );
@@ -669,9 +670,14 @@ export default function PlayPage() {
           {!isLive && <span className="viewing-history">· Viewing history</span>}
         </span>
         {!bracket.active && (
-          <button className="btn ghost small" onClick={() => setSeed(randomSeed())}>
-            New game
-          </button>
+          <span className="topbar-actions">
+            <Link href="/" className="btn ghost small" aria-label="Back to main menu">
+              ← Menu
+            </Link>
+            <button className="btn ghost small" onClick={() => setSeed(randomSeed())}>
+              New game
+            </button>
+          </span>
         )}
       </div>
 

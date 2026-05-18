@@ -222,10 +222,13 @@ function sum(xs: number[]): number {
 }
 
 function cloneState(state: GameState): GameState {
+  // Map geometry (cells, t.cells, t.neighbors, t.coastNeighbors) is immutable
+  // after generation, so we share references and only clone what mutates:
+  // territory owner/dice, player state, and history.
   return {
     ...state,
-    cells: state.cells, // immutable map geometry — share the reference
-    territories: state.territories.map((t) => ({ ...t, cells: [...t.cells], neighbors: [...t.neighbors] })),
+    cells: state.cells,
+    territories: state.territories.map((t) => ({ ...t })),
     players: state.players.map((p) => ({ ...p })),
     history: [...state.history],
   };

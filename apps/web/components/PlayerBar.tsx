@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { GameState, isUnderdog, largestConnectedSize } from "@opendicewar/core";
 import { isSubstantialTarget } from "@opendicewar/ai";
+import { drawDie3D } from "./dice";
 
 export function PlayerBar({ state }: { state: GameState }) {
   return (
@@ -147,22 +149,36 @@ function Wings() {
   );
 }
 
+const DIE_ICON_SIZE = 14;
+const DIE_ICON_DEPTH = Math.max(4, DIE_ICON_SIZE * 0.42); // matches drawDie3D
+const DIE_ICON_W = Math.ceil(DIE_ICON_SIZE + DIE_ICON_DEPTH);
+const DIE_ICON_H = Math.ceil(DIE_ICON_SIZE + DIE_ICON_DEPTH);
+
+/** Renders the same iso die used by the board's dice stack, sized for badges.
+ *  Shows the classic 1-on-top / 2-on-front / 3-on-right corner. */
 function DieIcon({ color }: { color: string }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = DIE_ICON_W * dpr;
+    canvas.height = DIE_ICON_H * dpr;
+    const ctx = canvas.getContext("2d")!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, DIE_ICON_W, DIE_ICON_H);
+    // Front face bottom-left sits on the canvas bottom so the top face fits
+    // above and the right face fits to the right inside the canvas bounds.
+    drawDie3D(ctx, 0, DIE_ICON_H, DIE_ICON_SIZE, color, 1, 2, 3);
+  }, [color]);
+
   return (
-    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden>
-      <rect x="2" y="4" width="16" height="14" rx="2" fill={color} stroke="#222" strokeWidth="1.2" />
-      <polygon points="2,4 5,1 21,1 18,4" fill={shade(color, 0.7)} stroke="#222" strokeWidth="1.2" />
-      <polygon points="18,4 21,1 21,15 18,18" fill={shade(color, 0.55)} stroke="#222" strokeWidth="1.2" />
-      <circle cx="10" cy="11" r="1.8" fill="#222" />
-    </svg>
+    <canvas
+      ref={ref}
+      aria-hidden
+      style={{ display: "block", width: DIE_ICON_W, height: DIE_ICON_H }}
+    />
   );
 }
 
-function shade(hex: string, factor: number): string {
-  const m = hex.match(/^#([0-9a-f]{6})$/i);
-  if (!m) return hex;
-  const r = Math.round(parseInt(m[1]!.slice(0, 2), 16) * factor);
-  const g = Math.round(parseInt(m[1]!.slice(2, 4), 16) * factor);
-  const b = Math.round(parseInt(m[1]!.slice(4, 6), 16) * factor);
-  return `#${[r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
-}

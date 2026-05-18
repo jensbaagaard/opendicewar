@@ -81,17 +81,6 @@ export function newGame(opts: NewGameOptions): GameState {
   };
 }
 
-/** Convenience for renderers — returns the cells generated for a seed. */
-export function generateMapForSeed(opts: NewGameOptions): MapData {
-  const rng = createRng(opts.seed);
-  return generateMap(rng, {
-    territoryCount: opts.territoryCount ?? 32,
-    gridWidth: opts.gridWidth ?? 14,
-    gridHeight: opts.gridHeight ?? 10,
-    cellsPerTerritory: opts.cellsPerTerritory ?? 4,
-  });
-}
-
 interface GenOpts {
   territoryCount: number;
   gridWidth: number;

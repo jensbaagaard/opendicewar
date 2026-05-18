@@ -44,60 +44,133 @@ export function drawDie3D(
   color: string,
   topValue: number = 1,
   frontValue: number = 0,
+  rightValue: number = 0,
 ) {
   const w = size;
   const h = size;
   const d = Math.max(4, size * 0.42);
   const fy = by - h; // front face top y
+  const radius = Math.max(1, size * 0.18);
 
-  const front = color;
   const right = shade(color, 0.7);
   const top = shade(color, 1.18);
 
-  ctx.lineJoin = "miter";
+  ctx.lineJoin = "round";
   ctx.lineWidth = 1;
-  ctx.strokeStyle = "#111";
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
 
-  // Right face (parallelogram).
+  // Right face — rounded parallelogram. Slightly less rounding on the far
+  // corners that meet the back of the cube.
   ctx.fillStyle = right;
-  ctx.beginPath();
-  ctx.moveTo(bx + w, by);
-  ctx.lineTo(bx + w + d, by - d);
-  ctx.lineTo(bx + w + d, fy - d);
-  ctx.lineTo(bx + w, fy);
-  ctx.closePath();
+  roundedPolyPath(
+    ctx,
+    [
+      { x: bx + w, y: by },
+      { x: bx + w + d, y: by - d },
+      { x: bx + w + d, y: fy - d },
+      { x: bx + w, y: fy },
+    ],
+    [radius, radius * 0.55, radius * 0.55, radius],
+  );
   ctx.fill();
   ctx.stroke();
 
-  // Top face (parallelogram).
+  // Top face — rounded parallelogram, same treatment.
   ctx.fillStyle = top;
-  ctx.beginPath();
-  ctx.moveTo(bx, fy);
-  ctx.lineTo(bx + d, fy - d);
-  ctx.lineTo(bx + w + d, fy - d);
-  ctx.lineTo(bx + w, fy);
-  ctx.closePath();
+  roundedPolyPath(
+    ctx,
+    [
+      { x: bx, y: fy },
+      { x: bx + d, y: fy - d },
+      { x: bx + w + d, y: fy - d },
+      { x: bx + w, y: fy },
+    ],
+    [radius, radius * 0.55, radius * 0.55, radius],
+  );
   ctx.fill();
   ctx.stroke();
 
-  // Front face.
-  ctx.fillStyle = front;
-  ctx.fillRect(bx, fy, w, h);
-  ctx.strokeRect(bx, fy, w, h);
-
-  // Specular highlight along the top-front edge for a glossy feel.
-  ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,0.55)";
-  ctx.lineWidth = Math.max(0.6, size * 0.05);
+  // Front face — flat color, rounded rectangle.
+  ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.moveTo(bx + size * 0.12, fy + ctx.lineWidth);
-  ctx.lineTo(bx + w - size * 0.12, fy + ctx.lineWidth);
+  roundRectPath(ctx, bx, fy, w, h, radius);
+  ctx.fill();
+  ctx.stroke();
+
+  // Soft inner highlight along the top of the front face.
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+  ctx.lineWidth = Math.max(0.6, size * 0.06);
+  ctx.beginPath();
+  ctx.moveTo(bx + radius * 0.9, fy + ctx.lineWidth * 0.9);
+  ctx.lineTo(bx + w - radius * 0.9, fy + ctx.lineWidth * 0.9);
   ctx.stroke();
   ctx.restore();
 
-  // Pips on top face — rendered onto a slightly skewed parallelogram.
+  // Pips on each visible face. The top/right faces are parallelograms, so
+  // pip positions are mapped through the face's local (u, v) parametrization.
   if (topValue > 0) drawPipsOnTop(ctx, bx, fy, w, d, topValue);
   if (frontValue > 0) drawPipsOnFront(ctx, bx, fy, w, h, frontValue);
+  if (rightValue > 0) drawPipsOnRight(ctx, bx, fy, w, h, d, rightValue);
+}
+
+/**
+ * Draws a closed path through `pts` with rounded corners. `radii[i]` is the
+ * corner radius at point `i`. Each radius is automatically clamped to half
+ * the shorter of the two adjacent edge lengths so it never overshoots.
+ */
+function roundedPolyPath(
+  ctx: CanvasRenderingContext2D,
+  pts: Array<{ x: number; y: number }>,
+  radii: number[],
+) {
+  const n = pts.length;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const p = pts[i]!;
+    const prev = pts[(i - 1 + n) % n]!;
+    const next = pts[(i + 1) % n]!;
+    const r = radii[i] ?? 0;
+
+    const v1x = p.x - prev.x;
+    const v1y = p.y - prev.y;
+    const l1 = Math.hypot(v1x, v1y) || 1;
+    const v2x = next.x - p.x;
+    const v2y = next.y - p.y;
+    const l2 = Math.hypot(v2x, v2y) || 1;
+    const cap = Math.min(r, l1 / 2, l2 / 2);
+
+    const sx = p.x - (v1x / l1) * cap;
+    const sy = p.y - (v1y / l1) * cap;
+    const ex = p.x + (v2x / l2) * cap;
+    const ey = p.y + (v2y / l2) * cap;
+
+    if (i === 0) ctx.moveTo(sx, sy);
+    else ctx.lineTo(sx, sy);
+    ctx.quadraticCurveTo(p.x, p.y, ex, ey);
+  }
+  ctx.closePath();
+}
+
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
 }
 
 function drawPip(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
@@ -166,10 +239,37 @@ function drawPipsOnTop(
   }
 }
 
+function drawPipsOnRight(
+  ctx: CanvasRenderingContext2D,
+  bx: number,
+  fy: number,
+  w: number,
+  h: number,
+  d: number,
+  value: number,
+) {
+  const pattern = PIP_PATTERNS[value];
+  if (!pattern) return;
+  const r = Math.max(1.2, w * 0.085);
+  // Right face corners: P00=(bx+w, fy), P10=(bx+w+d, fy-d) (top edge),
+  // P01=(bx+w, fy+h), P11=(bx+w+d, fy+h-d) (bottom edge). u runs front→back,
+  // v runs top→bottom.
+  const toXY = (u: number, v: number) => ({
+    x: bx + w + u * d,
+    y: fy - u * d + v * h,
+  });
+  for (const i of pattern) {
+    const [u, v] = PIP_POSITIONS[i]!;
+    const p = toXY(u, v);
+    drawPip(ctx, p.x, p.y, r);
+  }
+}
+
 /**
  * Draws `count` dice as side-by-side stacks, each holding at most
  * DICE_PER_STACK dice. Stacks are centered horizontally at `cx`; the bottom
- * sits at `by`. Pips are only shown on the top die of each stack.
+ * sits at `by`. Each die shows the classic iso die corner: 1 on top, 2 on
+ * front, 3 on right.
  */
 export function drawDiceStack(
   ctx: CanvasRenderingContext2D,
@@ -215,7 +315,9 @@ export function drawDiceStack(
     for (let i = 0; i < colCount; i++) {
       const dieBy = by - i * stride;
       const isTop = i === colCount - 1;
-      drawDie3D(ctx, bx, dieBy, size, color, isTop ? 1 : 0, 0);
+      // Classic die corner: 1 on top (only meaningful on the topmost die since
+      // lower top faces are mostly occluded), 2 on front, 3 on right.
+      drawDie3D(ctx, bx, dieBy, size, color, isTop ? 1 : 0, 2, 3);
     }
     bx += size + DIE_COLUMN_GAP;
   }
