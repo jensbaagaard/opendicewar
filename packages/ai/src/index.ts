@@ -59,8 +59,8 @@ export const DefensiveBot: Agent = {
   name: "Defensive",
   chooseAction(state) {
     return personalityChooseAction(state, {
-      weights: { heuristic: 1, aggressive: 0, retaliation: 2 },
-      minWinP: 0.7,
+      weights: { heuristic: 1, aggressive: 0, retaliation: 1.5 },
+      minWinP: 0.6,
     });
   },
 };
@@ -87,7 +87,7 @@ export const OpportunistBot: Agent = {
   chooseAction(state) {
     return personalityChooseAction(state, {
       weights: { heuristic: 1, aggressive: 0 },
-      maxDefenderDice: 2,
+      maxDefenderDice: 4,
     });
   },
 };
@@ -109,8 +109,8 @@ export const MCTSBot: Agent = {
   name: "MCTS",
   chooseAction(state) {
     return mctsChooseAction(state, {
-      iterations: 250,
-      rolloutDepth: 80,
+      iterations: 150,
+      rolloutDepth: 60,
       explorationC: 1.2,
     });
   },
@@ -149,16 +149,47 @@ function personalityChooseAction(state: GameState, opts: PersonalityOpts): Agent
   const ctx = buildContext(state, opts.weights);
 
   let best: ScoredMove | null = null;
+  // Track best move ignoring the personality filters too — used as the
+  // anti-stall fallback when filters reject everything and we're forced
+  // to take *something* in a 1v1 endgame.
+  let bestUnfiltered: ScoredMove | null = null;
   for (const { from, to } of moves) {
+    const scored = scoreMove(state, ctx, from, to, opts.weights);
+    if (bestUnfiltered === null || scored.score > bestUnfiltered.score) {
+      bestUnfiltered = scored;
+    }
     if (opts.maxDefenderDice !== undefined) {
       const dst = state.territories[to]!;
       if (dst.dice > opts.maxDefenderDice) continue;
     }
-    const scored = scoreMove(state, ctx, from, to, opts.weights);
     if (opts.minWinP !== undefined && scored.winP < opts.minWinP) continue;
     if (best === null || scored.score > best.score) best = scored;
   }
 
-  if (best === null || best.score <= 0) return { kind: "endTurn" };
-  return { kind: "attack", from: best.from, to: best.to };
+  if (best !== null && best.score > 0) {
+    return { kind: "attack", from: best.from, to: best.to };
+  }
+
+  // Anti-stall: in a 1v1 endgame, refusing to attack is strictly worse than
+  // a coin-flip attack — reinforcement is symmetric and the game can only
+  // end via a capture. Force the best available attack when we're not the
+  // leader. Personality filters (minWinP/maxDefenderDice) are intentionally
+  // ignored here: in a forced-stall, "any progress" outweighs personality.
+  if (shouldForceAttack(state, ctx) && bestUnfiltered !== null) {
+    return { kind: "attack", from: bestUnfiltered.from, to: bestUnfiltered.to };
+  }
+
+  return { kind: "endTurn" };
+}
+
+function shouldForceAttack(state: GameState, ctx: ReturnType<typeof buildContext>): boolean {
+  if (ctx.aliveCount !== 2) return false;
+  // I'm trailing or tied on territory count — passing only widens the gap.
+  let myCount = ctx.territoryCount[ctx.me]!;
+  let oppCount = 0;
+  for (let i = 0; i < ctx.territoryCount.length; i++) {
+    if (i === ctx.me) continue;
+    if (state.players[i]?.alive) oppCount = Math.max(oppCount, ctx.territoryCount[i]!);
+  }
+  return myCount <= oppCount;
 }

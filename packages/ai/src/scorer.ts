@@ -42,6 +42,13 @@ export interface ScorerContext {
   enemyBaseConn: number[];
   /** Per-owner political dominance multiplier addend (zero for me/dead). */
   ownerBonus: number[] | null;
+  /** Number of players still alive; used to dampen retaliation pessimism
+   *  in low-player-count endgames (a sole remaining opponent is governed
+   *  by the same EV math as us and won't always counterattack). */
+  aliveCount: number;
+  /** Pre-move territory count, by PlayerId — used by force-attack to decide
+   *  whether the bot is "behind". */
+  territoryCount: number[];
 }
 
 export function buildContext(
@@ -58,7 +65,13 @@ export function buildContext(
   }
   const politicalW = weights.political ?? 0;
   const ownerBonus = politicalW > 0 ? computeOwnerDominanceBonus(state, me) : null;
-  return { me, baseConn, enemyBaseConn, ownerBonus };
+  let aliveCount = 0;
+  const territoryCount = new Array<number>(N).fill(0);
+  for (const p of state.players) if (p.alive) aliveCount++;
+  for (const t of state.territories) {
+    if (t.owner >= 0) territoryCount[t.owner]!++;
+  }
+  return { me, baseConn, enemyBaseConn, ownerBonus, aliveCount, territoryCount };
 }
 
 export interface ScorerWeights {
@@ -68,7 +81,10 @@ export interface ScorerWeights {
   aggressive: number;
   /** Strength of leader-targeting bias (multiplier on captureValue). */
   political?: number;
-  /** Strength of retaliation penalty. Default 1.0; 0 disables. */
+  /** Strength of retaliation penalty. Default 0.5; 0 disables. The penalty
+   *  assumes a worst-case adjacent enemy *will* attack back, which is too
+   *  pessimistic in practice (enemies often have their own EV reasons to
+   *  decline), so the default is a half-strength application. */
   retaliation?: number;
   /** Weight on opponent-largest-blob loss (default 1.0; 0 disables). */
   enemyConnLoss?: number;
@@ -119,7 +135,14 @@ export function scoreMove(
 
   // Retaliation: after a win, dst has src.dice-1 and src has 1. Both are
   // exposed. Subtract the EV of being retaken (winP_enemy * value_lost).
-  const retaW = w.retaliation ?? 1;
+  //
+  // The retaliator is using the same EV math as us. When few players are
+  // alive, they're more constrained (their own retaliation worries apply
+  // symmetrically), so dampen the penalty: full strength at 4+ alive,
+  // half by 2 alive. This breaks the symmetric-pessimism stalemate where
+  // both sides refuse coin-flip attacks because each fears the other's
+  // counter — which the other side also refuses for the same reason.
+  const retaW = (w.retaliation ?? 0.5) * aliveScaling(ctx.aliveCount);
   let retaliationPenalty = 0;
   if (retaW > 0) {
     retaliationPenalty = retaW * winP * expectedRetaliationLoss(state, ctx, from, to);
@@ -143,6 +166,15 @@ export function scoreMove(
     connGain,
     enemyConnLoss: enemyLoss,
   };
+}
+
+/** Retaliation pessimism multiplier by alive count.
+ *  4+ alive → full strength; 3 alive → 0.7; 2 alive → 0.4.
+ *  See scoreMove for the rationale. */
+function aliveScaling(aliveCount: number): number {
+  if (aliveCount >= 4) return 1;
+  if (aliveCount === 3) return 0.7;
+  return 0.4;
 }
 
 /**

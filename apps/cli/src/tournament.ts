@@ -29,6 +29,7 @@ interface Args {
   players: number;
   territories: number;
   maxSteps: number;
+  bots?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -39,21 +40,33 @@ function parseArgs(argv: string[]): Args {
     else if (k === "players") args.players = Number(v);
     else if (k === "territories") args.territories = Number(v);
     else if (k === "max-steps") args.maxSteps = Number(v);
+    else if (k === "bots") args.bots = v;
   }
   return args;
 }
 
-const BOTS: Agent[] = [
-  RandomBot,
-  GreedyBot,
-  HeuristicBot,
-  PoliticalBot,
-  DefensiveBot,
-  SplitterBot,
-  OpportunistBot,
-  BeamBot,
-  MCTSBot,
-];
+const ALL_BOTS: Record<string, Agent> = {
+  Random: RandomBot,
+  Aggressive: GreedyBot,
+  Heuristic: HeuristicBot,
+  Political: PoliticalBot,
+  Defensive: DefensiveBot,
+  Splitter: SplitterBot,
+  Opportunist: OpportunistBot,
+  Beam: BeamBot,
+  MCTS: MCTSBot,
+};
+
+function selectBots(filter: string | undefined): Agent[] {
+  if (!filter) return Object.values(ALL_BOTS);
+  return filter
+    .split(",")
+    .map((n) => {
+      const bot = ALL_BOTS[n];
+      if (!bot) throw new Error(`Unknown bot: ${n}. Choices: ${Object.keys(ALL_BOTS).join(", ")}`);
+      return bot;
+    });
+}
 
 function playGame(
   seed: number,
@@ -74,6 +87,10 @@ function playGame(
     else state = applyAttack(state, action.from, action.to);
     steps++;
   }
+  // Only credit a winner when the game ended naturally. Max-step bailouts
+  // happen when bots all play conservatively and the board stalemates —
+  // recording them as P0 wins would be a position bias.
+  if (state.phase !== "ended") return { winnerSeat: null, steps };
   const winner = state.players.find((p) => p.alive);
   return { winnerSeat: winner?.id ?? null, steps };
 }
@@ -81,6 +98,7 @@ function playGame(
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   const { seeds, players, territories, maxSteps } = args;
+  const BOTS = selectBots(args.bots);
 
   const wins = new Map<string, number>();
   const games = new Map<string, number>();
@@ -94,20 +112,25 @@ function main(): void {
   let drawn = 0;
 
   for (let s = 0; s < seeds; s++) {
-    // Rotate the bot lineup so each bot occupies every seat over the run.
+    const tSeed = Date.now();
     const seats: Agent[] = [];
     for (let i = 0; i < players; i++) {
       seats.push(BOTS[(s + i) % BOTS.length]!);
     }
-    const { winnerSeat } = playGame(s + 1, seats, territories, maxSteps);
+    const { winnerSeat, steps } = playGame(s + 1, seats, territories, maxSteps);
     for (const seat of seats) games.set(seat.name, (games.get(seat.name) ?? 0) + 1);
+    let winnerName = "draw";
     if (winnerSeat !== null) {
-      const name = seats[winnerSeat]!.name;
-      wins.set(name, (wins.get(name) ?? 0) + 1);
+      winnerName = seats[winnerSeat]!.name;
+      wins.set(winnerName, (wins.get(winnerName) ?? 0) + 1);
     } else {
       drawn++;
     }
     played++;
+    const ms = Date.now() - tSeed;
+    process.stderr.write(
+      `  seed=${s + 1}/${seeds} winner=${winnerName} steps=${steps} ${ms}ms seats=[${seats.map((a) => a.name).join(",")}]\n`,
+    );
   }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);

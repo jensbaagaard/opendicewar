@@ -34,8 +34,12 @@ export interface BeamOptions {
 }
 
 interface Node {
-  /** Cumulative expected score for the sequence so far. */
+  /** Cumulative expected score for the sequence so far, properly weighted
+   *  by the probability of *reaching* this branch. */
   cumScore: number;
+  /** Product of step win probabilities so far — probability we actually
+   *  arrive at this node along the win-branch path. */
+  cumProb: number;
   /** Speculative board after applying win-branch transitions for each step. */
   state: GameState;
   /** First-move (from, to) — the one we'd actually play to reach this branch. */
@@ -54,18 +58,31 @@ export function beamChooseAction(state: GameState, opts: BeamOptions): BeamChoic
   // Seed beam with all first-moves.
   const initialCtx = buildContext(state, opts.weights);
   let frontier: Node[] = [];
+  let bestNegative: { from: TerritoryId; to: TerritoryId; score: number } | null = null;
   for (const m of root) {
     const scored = scoreMove(state, initialCtx, m.from, m.to, opts.weights);
-    if (scored.score <= 0) continue;
+    if (scored.score <= 0) {
+      if (bestNegative === null || scored.score > bestNegative.score) {
+        bestNegative = { from: m.from, to: m.to, score: scored.score };
+      }
+      continue;
+    }
     const next = simulateWinBranch(state, m.from, m.to);
     frontier.push({
-      cumScore: scored.score,
+      cumScore: scored.score, // step 1 cumProb is 1 by construction
+      cumProb: scored.winP,
       state: next,
       firstFrom: m.from,
       firstTo: m.to,
     });
   }
-  if (frontier.length === 0) return { kind: "endTurn" };
+  if (frontier.length === 0) {
+    // Anti-stall fallback — same rationale as personalityChooseAction.
+    if (bestNegative !== null && shouldForceAttackBeam(state, initialCtx)) {
+      return { kind: "attack", from: bestNegative.from, to: bestNegative.to };
+    }
+    return { kind: "endTurn" };
+  }
 
   frontier = topK(frontier, opts.beam);
 
@@ -80,8 +97,11 @@ export function beamChooseAction(state: GameState, opts: BeamOptions): BeamChoic
         const scored = scoreMove(node.state, ctx, m.from, m.to, opts.weights);
         if (scored.score <= 0) continue;
         const childState = simulateWinBranch(node.state, m.from, m.to);
+        // Probability-weighted contribution: this step is only realized if
+        // every prior attack in the sequence also won (cumProb).
         next.push({
-          cumScore: node.cumScore + scored.score,
+          cumScore: node.cumScore + node.cumProb * scored.score,
+          cumProb: node.cumProb * scored.winP,
           state: childState,
           firstFrom: node.firstFrom,
           firstTo: node.firstTo,
@@ -94,6 +114,20 @@ export function beamChooseAction(state: GameState, opts: BeamOptions): BeamChoic
   }
 
   return { kind: "attack", from: bestSoFar.firstFrom, to: bestSoFar.firstTo };
+}
+
+function shouldForceAttackBeam(
+  state: GameState,
+  ctx: ReturnType<typeof buildContext>,
+): boolean {
+  if (ctx.aliveCount !== 2) return false;
+  const myCount = ctx.territoryCount[ctx.me]!;
+  let oppCount = 0;
+  for (let i = 0; i < ctx.territoryCount.length; i++) {
+    if (i === ctx.me) continue;
+    if (state.players[i]?.alive) oppCount = Math.max(oppCount, ctx.territoryCount[i]!);
+  }
+  return myCount <= oppCount;
 }
 
 function topK(nodes: Node[], k: number): Node[] {
