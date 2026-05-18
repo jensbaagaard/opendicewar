@@ -35,7 +35,7 @@ export function HistoryBar({
   return (
     <div className="history-bar">
       <button
-        className="btn ghost small"
+        className="btn ghost small first"
         onClick={() => onSeek(0)}
         disabled={atStart}
         aria-label="First step"
@@ -43,7 +43,7 @@ export function HistoryBar({
         ⏮
       </button>
       <button
-        className="btn ghost small"
+        className="btn ghost small prev"
         onClick={() => onSeek(currentStep - 1)}
         disabled={atStart}
         aria-label="Previous step"
@@ -60,7 +60,7 @@ export function HistoryBar({
         onChange={(e) => onSeek(Number(e.currentTarget.value))}
       />
       <button
-        className="btn ghost small"
+        className="btn ghost small next"
         onClick={() => onSeek(currentStep + 1)}
         disabled={atEnd}
         aria-label="Next step"
@@ -68,7 +68,7 @@ export function HistoryBar({
         ▶
       </button>
       <button
-        className="btn ghost small"
+        className="btn ghost small last"
         onClick={() => onSeek(totalSteps)}
         disabled={atEnd}
         aria-label="Last step"
@@ -76,7 +76,7 @@ export function HistoryBar({
         ⏭
       </button>
       <button
-        className="btn ghost small"
+        className="btn ghost small live"
         onClick={onBackToLive}
         disabled={isLive}
         aria-label="Back to live"

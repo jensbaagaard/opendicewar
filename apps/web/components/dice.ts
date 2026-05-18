@@ -48,43 +48,81 @@ export function drawDie3D(
   const w = size;
   const h = size;
   const d = Math.max(4, size * 0.42);
+  const fy = by - h; // front face top y
 
   const front = color;
   const right = shade(color, 0.7);
   const top = shade(color, 1.18);
 
-  // Right face (parallelogram)
-  ctx.fillStyle = right;
+  ctx.lineJoin = "miter";
+  ctx.lineWidth = 1;
   ctx.strokeStyle = "#111";
-  ctx.lineWidth = 1.1;
+
+  // Right face (parallelogram).
+  ctx.fillStyle = right;
   ctx.beginPath();
   ctx.moveTo(bx + w, by);
   ctx.lineTo(bx + w + d, by - d);
-  ctx.lineTo(bx + w + d, by - h - d);
-  ctx.lineTo(bx + w, by - h);
+  ctx.lineTo(bx + w + d, fy - d);
+  ctx.lineTo(bx + w, fy);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
 
-  // Top face (parallelogram)
+  // Top face (parallelogram).
   ctx.fillStyle = top;
   ctx.beginPath();
-  ctx.moveTo(bx, by - h);
-  ctx.lineTo(bx + d, by - h - d);
-  ctx.lineTo(bx + w + d, by - h - d);
-  ctx.lineTo(bx + w, by - h);
+  ctx.moveTo(bx, fy);
+  ctx.lineTo(bx + d, fy - d);
+  ctx.lineTo(bx + w + d, fy - d);
+  ctx.lineTo(bx + w, fy);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
 
-  // Front face
+  // Front face.
   ctx.fillStyle = front;
-  ctx.fillRect(bx, by - h, w, h);
-  ctx.strokeRect(bx, by - h, w, h);
+  ctx.fillRect(bx, fy, w, h);
+  ctx.strokeRect(bx, fy, w, h);
+
+  // Specular highlight along the top-front edge for a glossy feel.
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.lineWidth = Math.max(0.6, size * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(bx + size * 0.12, fy + ctx.lineWidth);
+  ctx.lineTo(bx + w - size * 0.12, fy + ctx.lineWidth);
+  ctx.stroke();
+  ctx.restore();
 
   // Pips on top face — rendered onto a slightly skewed parallelogram.
-  if (topValue > 0) drawPipsOnTop(ctx, bx, by - h, w, d, topValue);
-  if (frontValue > 0) drawPipsOnFront(ctx, bx, by - h, w, h, frontValue);
+  if (topValue > 0) drawPipsOnTop(ctx, bx, fy, w, d, topValue);
+  if (frontValue > 0) drawPipsOnFront(ctx, bx, fy, w, h, frontValue);
+}
+
+function drawPip(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
+  // Drop shadow (offset down-right) — gives the pip a recessed-into-face look.
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.beginPath();
+  ctx.arc(cx + r * 0.18, cy + r * 0.22, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // White pip body with a soft radial highlight toward upper-left.
+  const grad = ctx.createRadialGradient(
+    cx - r * 0.35,
+    cy - r * 0.35,
+    r * 0.1,
+    cx,
+    cy,
+    r,
+  );
+  grad.addColorStop(0, "#ffffff");
+  grad.addColorStop(0.7, "#f0f0f0");
+  grad.addColorStop(1, "#cfcfcf");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 function drawPipsOnFront(
@@ -97,16 +135,10 @@ function drawPipsOnFront(
 ) {
   const pattern = PIP_PATTERNS[value];
   if (!pattern) return;
-  const r = Math.max(1.4, w * 0.085);
-  ctx.fillStyle = "#fafafa";
-  ctx.strokeStyle = "rgba(0,0,0,0.45)";
-  ctx.lineWidth = 0.6;
+  const r = Math.max(1.4, w * 0.095);
   for (const i of pattern) {
     const [px, py] = PIP_POSITIONS[i]!;
-    ctx.beginPath();
-    ctx.arc(x + px * w, y + py * h, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    drawPip(ctx, x + px * w, y + py * h, r);
   }
 }
 
@@ -120,10 +152,7 @@ function drawPipsOnTop(
 ) {
   const pattern = PIP_PATTERNS[value];
   if (!pattern) return;
-  const r = Math.max(1.3, w * 0.08);
-  ctx.fillStyle = "#fafafa";
-  ctx.strokeStyle = "rgba(0,0,0,0.45)";
-  ctx.lineWidth = 0.6;
+  const r = Math.max(1.3, w * 0.09);
   // Map (u, v) in [0,1]^2 on the top face to canvas xy.
   // Top corners: P00=(fx,fy), P10=(fx+w,fy), P01=(fx+d, fy-d), P11=(fx+w+d, fy-d)
   const toXY = (u: number, v: number) => ({
@@ -133,10 +162,7 @@ function drawPipsOnTop(
   for (const i of pattern) {
     const [u, v] = PIP_POSITIONS[i]!;
     const p = toXY(u, v);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    drawPip(ctx, p.x, p.y, r);
   }
 }
 
@@ -215,6 +241,34 @@ export function drawDiceRow(
     drawDie3D(ctx, x, cy + size, size, color, 0, v);
     x += size + gap;
   }
+}
+
+/**
+ * Draws a die centered at (cx, cy) with the given rotation (rad) and uniform
+ * scale. Used by the attack animation so each die can spin and bounce
+ * independently of the row layout.
+ */
+export function drawDie3DCentered(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+  color: string,
+  topValue: number,
+  frontValue: number,
+  rot: number,
+  scaleX: number,
+  scaleY: number = scaleX,
+  alpha: number = 1,
+) {
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.translate(cx, cy);
+  if (rot !== 0) ctx.rotate(rot);
+  if (scaleX !== 1 || scaleY !== 1) ctx.scale(scaleX, scaleY);
+  // drawDie3D takes the front-face bottom-left; offset so the die centers on origin.
+  drawDie3D(ctx, -size / 2, size / 2, size, color, topValue, frontValue);
+  ctx.restore();
 }
 
 export function shade(hex: string, factor: number): string {

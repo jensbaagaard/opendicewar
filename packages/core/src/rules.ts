@@ -18,7 +18,8 @@ export function isLegalAttack(state: GameState, from: TerritoryId, to: Territory
   if (src.owner !== state.currentPlayer) return false;
   if (dst.owner === state.currentPlayer) return false;
   if (src.dice < 2) return false;
-  return src.neighbors.includes(to);
+  if (src.neighbors.includes(to)) return true;
+  return state.navalAttacks && src.coastNeighbors.includes(to);
 }
 
 export function applyAttack(state: GameState, from: TerritoryId, to: TerritoryId): GameState {
@@ -31,8 +32,15 @@ export function applyAttack(state: GameState, from: TerritoryId, to: TerritoryId
   const dst = next.territories[to]!;
   const attacker = src.owner;
 
-  const atkRolls = rollMany(rng, src.dice);
-  const defRolls = rollMany(rng, dst.dice);
+  // Hidden underdog bonus: weak players (when >2 alive) roll each die twice
+  // and keep the higher value. Individual dice still show 1-6, but the
+  // expected total is ~28% higher than a fair roll.
+  const atkRolls = isUnderdog(next, src.owner)
+    ? rollWithAdvantage(rng, src.dice)
+    : rollMany(rng, src.dice);
+  const defRolls = isUnderdog(next, dst.owner)
+    ? rollWithAdvantage(rng, dst.dice)
+    : rollMany(rng, dst.dice);
   const atkSum = sum(atkRolls);
   const defSum = sum(defRolls);
   const win = atkSum > defSum;
@@ -122,6 +130,34 @@ function reinforce(state: GameState, player: PlayerId): GameState {
   return state;
 }
 
+/** A player is an underdog when more than two players are alive and their
+ *  total dice are less than half the average of the other alive players.
+ *  Used by applyAttack to grant a hidden roll bonus. */
+export function isUnderdog(state: GameState, playerId: PlayerId): boolean {
+  let aliveCount = 0;
+  for (const p of state.players) if (p.alive) aliveCount++;
+  if (aliveCount <= 2) return false;
+
+  const me = state.players[playerId];
+  if (!me || !me.alive) return false;
+
+  let myDice = 0;
+  let otherDice = 0;
+  let otherCount = 0;
+  for (const t of state.territories) {
+    if (t.owner < 0) continue;
+    const owner = state.players[t.owner];
+    if (!owner || !owner.alive) continue;
+    if (t.owner === playerId) myDice += t.dice;
+    else otherDice += t.dice;
+  }
+  for (const p of state.players) {
+    if (p.alive && p.id !== playerId) otherCount++;
+  }
+  if (otherCount === 0) return false;
+  return myDice < 0.5 * (otherDice / otherCount);
+}
+
 export function largestConnectedSize(state: GameState, player: PlayerId): number {
   const owned = new Set(state.territories.filter((t) => t.owner === player).map((t) => t.id));
   const visited = new Set<TerritoryId>();
@@ -169,6 +205,16 @@ function rollMany(rng: { d6(): number }, count: number): number[] {
   return out;
 }
 
+function rollWithAdvantage(rng: { d6(): number }, count: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const a = rng.d6();
+    const b = rng.d6();
+    out.push(a > b ? a : b);
+  }
+  return out;
+}
+
 function sum(xs: number[]): number {
   let s = 0;
   for (const x of xs) s += x;
@@ -193,6 +239,13 @@ export function legalAttacks(state: GameState): Array<{ from: TerritoryId; to: T
     for (const n of t.neighbors) {
       if (state.territories[n]!.owner !== state.currentPlayer) {
         out.push({ from: t.id, to: n });
+      }
+    }
+    if (state.navalAttacks) {
+      for (const n of t.coastNeighbors) {
+        if (state.territories[n]!.owner !== state.currentPlayer) {
+          out.push({ from: t.id, to: n });
+        }
       }
     }
   }

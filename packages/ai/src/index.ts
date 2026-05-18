@@ -111,13 +111,23 @@ function blendedChooseAction(state: GameState, weights: BlendWeights): AgentActi
 }
 
 /** Quadratic-above-fair-share dominance scale. Tuned so a player controlling
- *  half the map yields a bonus of ~10 (10× captureValue at political=1.0,
- *  ~3.7× at political=0.25). Near fair share, bonus ≈ 0. */
-const DOMINANCE_K = 100;
+ *  half the map yields a bonus of ~16 (~5× captureValue at political=0.25).
+ *  Near fair share, bonus ≈ 0. */
+const DOMINANCE_K = 150;
 
-/** Returns a per-player additive bonus, indexed by PlayerId. Zero for the
- *  current player and for dead/non-dominant opponents. */
-function computeOwnerDominanceBonus(state: GameState, me: number): number[] {
+/** Excess (dominance minus fair share) at which a 0.25-political bot's
+ *  captureValue multiplier reaches ~1.56× — the threshold for "substantial"
+ *  targeting. Used by isSubstantialTarget for UI markers. */
+const SUBSTANTIAL_EXCESS = 0.15;
+
+interface ShareTotals {
+  terr: number[];
+  dice: number[];
+  terrDenom: number;
+  diceDenom: number;
+}
+
+function precomputeShares(state: GameState): ShareTotals {
   const N = state.players.length;
   const terr = new Array<number>(N).fill(0);
   const dice = new Array<number>(N).fill(0);
@@ -130,22 +140,49 @@ function computeOwnerDominanceBonus(state: GameState, me: number): number[] {
     totalDice += t.dice;
     totalTerr++;
   }
+  return {
+    terr,
+    dice,
+    terrDenom: Math.max(1, totalTerr),
+    diceDenom: Math.max(1, totalDice),
+  };
+}
 
+function dominance(state: GameState, playerId: number, shares: ShareTotals): number {
+  const conn = largestConnectedSize(state, playerId);
+  return (
+    0.4 * (shares.terr[playerId]! / shares.terrDenom) +
+    0.35 * (conn / shares.terrDenom) +
+    0.25 * (shares.dice[playerId]! / shares.diceDenom)
+  );
+}
+
+function fairShareOf(state: GameState): number {
   let aliveCount = 0;
   for (const p of state.players) if (p.alive) aliveCount++;
-  const fairShare = aliveCount > 0 ? 1 / aliveCount : 1;
-  const diceDenom = Math.max(1, totalDice);
-  const terrDenom = Math.max(1, totalTerr);
+  return aliveCount > 0 ? 1 / aliveCount : 1;
+}
 
+/** True when the player is dominating the board enough that a 0.25-weight
+ *  PoliticalBot would substantially amplify attacks against them. */
+export function isSubstantialTarget(state: GameState, playerId: number): boolean {
+  const p = state.players[playerId];
+  if (!p || !p.alive) return false;
+  const shares = precomputeShares(state);
+  const dom = dominance(state, playerId, shares);
+  return dom - fairShareOf(state) >= SUBSTANTIAL_EXCESS;
+}
+
+/** Returns a per-player additive bonus, indexed by PlayerId. Zero for the
+ *  current player and for dead/non-dominant opponents. */
+function computeOwnerDominanceBonus(state: GameState, me: number): number[] {
+  const N = state.players.length;
+  const shares = precomputeShares(state);
+  const fairShare = fairShareOf(state);
   const bonus = new Array<number>(N).fill(0);
   for (const p of state.players) {
     if (!p.alive || p.id === me) continue;
-    const conn = largestConnectedSize(state, p.id);
-    const dom =
-      0.4 * (terr[p.id]! / terrDenom) +
-      0.35 * (conn / terrDenom) +
-      0.25 * (dice[p.id]! / diceDenom);
-    const excess = Math.max(0, dom - fairShare);
+    const excess = Math.max(0, dominance(state, p.id, shares) - fairShare);
     bonus[p.id] = excess * excess * DOMINANCE_K;
   }
   return bonus;

@@ -32,6 +32,8 @@ export interface NewGameOptions {
   /** Average cells per territory. Default 4. */
   cellsPerTerritory?: number;
   startingDicePerTerritory?: number;
+  /** Enable +1 coastal attack range across one hex of open water. */
+  navalAttacks?: boolean;
 }
 
 export interface MapData {
@@ -75,6 +77,7 @@ export function newGame(opts: NewGameOptions): GameState {
     territories: map.territories,
     players,
     history: [],
+    navalAttacks: opts.navalAttacks ?? false,
   };
 }
 
@@ -194,6 +197,30 @@ function generateMap(rng: Rng, opts: GenOpts): MapData {
     }
   }
 
+  // 5b. Build coast adjacency: pairs of territories whose cells are separated
+  // by exactly one hex of open water (an unclaimed position, including the
+  // implicit ocean outside the grid). Excludes pairs already land-adjacent.
+  const coastAdjacency: Set<TerritoryId>[] = Array.from({ length: wanted }, () => new Set<TerritoryId>());
+  for (const c of cells) {
+    for (const d of HEX_DIRS) {
+      const wq = c.q + d.q;
+      const wr = c.r + d.r;
+      if (cellByCoord.has(axialKey(wq, wr))) continue; // not water
+      for (const d2 of HEX_DIRS) {
+        const otherId = cellByCoord.get(axialKey(wq + d2.q, wr + d2.r));
+        if (otherId === undefined || otherId === c.id) continue;
+        const other = cellMeta.get(otherId)!;
+        if (other.territory === c.territory) continue;
+        coastAdjacency[c.territory]!.add(other.territory);
+        coastAdjacency[other.territory]!.add(c.territory);
+      }
+    }
+  }
+  // Land adjacency takes precedence — coast list is only the "extra" hops.
+  for (let t = 0; t < wanted; t++) {
+    for (const n of adjacency[t]!) coastAdjacency[t]!.delete(n);
+  }
+
   // 6. Materialize territories. Drop any with zero cells.
   const territories: Territory[] = [];
   const remap = new Map<TerritoryId, TerritoryId>();
@@ -208,12 +235,17 @@ function generateMap(rng: Rng, opts: GenOpts): MapData {
       dice: 1,
       cells: members,
       neighbors: [],
+      coastNeighbors: [],
     });
   }
   for (let t = 0; t < wanted; t++) {
     const newTid = remap.get(t);
     if (newTid === undefined) continue;
     territories[newTid]!.neighbors = [...adjacency[t]!]
+      .map((x) => remap.get(x))
+      .filter((x): x is TerritoryId => x !== undefined)
+      .sort((a, b) => a - b);
+    territories[newTid]!.coastNeighbors = [...coastAdjacency[t]!]
       .map((x) => remap.get(x))
       .filter((x): x is TerritoryId => x !== undefined)
       .sort((a, b) => a - b);

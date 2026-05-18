@@ -15,6 +15,9 @@ export interface Territory {
   dice: number;
   cells: CellId[];
   neighbors: TerritoryId[];
+  /** Territories reachable across a single hex of water — used for naval
+   *  attacks when GameState.navalAttacks is on. Disjoint from `neighbors`. */
+  coastNeighbors: TerritoryId[];
 }
 
 export interface PlayerState {
@@ -36,6 +39,9 @@ export interface GameState {
   territories: Territory[];
   players: PlayerState[];
   history: Action[];
+  /** When true, coastal territories may attack their coastNeighbors across
+   *  water (one water-hex range). A deviation from the original Dicewars. */
+  navalAttacks: boolean;
 }
 
 export type Action =

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Action,
   AttackAction,
@@ -17,6 +17,24 @@ import { Board, RollAnimation } from "../../components/Board";
 import { PlayerBar } from "../../components/PlayerBar";
 import { Legend } from "../../components/Legend";
 import { HistoryBar } from "../../components/HistoryBar";
+import { KnockoutSplash, KnockoutEvent } from "../../components/KnockoutSplash";
+import { GameEndOverlay } from "../../components/GameEndOverlay";
+import { ReinforceFx, ReinforceEvent } from "../../components/ReinforceFx";
+import { TurnBanner } from "../../components/TurnBanner";
+import { TournamentBar } from "../../components/TournamentBar";
+import { MatchWonSplash, MatchWonEvent } from "../../components/MatchWonSplash";
+import { TournamentEndOverlay } from "../../components/TournamentEndOverlay";
+import { BracketView } from "../../components/BracketView";
+import {
+  BRACKET_REROLLS_PER_MATCH,
+  BracketState,
+  ROUND_LABELS,
+  applyHumanLoss,
+  applyHumanWin,
+  findHumanMatch,
+  generateBracket,
+  humanOpponent,
+} from "../../components/bracket";
 
 const HUMAN: number = 0;
 const PLAYER_COUNT = 7;
@@ -60,6 +78,50 @@ function applyNavigable(state: GameState, action: Action): GameState {
   return state;
 }
 
+function SeedInput({
+  seed,
+  onSubmit,
+}: {
+  seed: number;
+  onSubmit: (next: number) => void;
+}) {
+  const [value, setValue] = useState<string>(String(seed));
+  useEffect(() => {
+    setValue(String(seed));
+  }, [seed]);
+  const commit = () => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) {
+      setValue(String(seed));
+      return;
+    }
+    const next = (n >>> 0) || 1;
+    if (next !== seed) onSubmit(next);
+    else setValue(String(seed));
+  };
+  return (
+    <input
+      className="seed-input"
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      value={value}
+      onChange={(e) => setValue(e.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          setValue(String(seed));
+          e.currentTarget.blur();
+        }
+      }}
+      onFocus={(e) => e.currentTarget.select()}
+      aria-label="Game seed"
+    />
+  );
+}
+
 /** Reads ?seed=N from the URL. Returns null if absent or invalid. */
 function readSeedParam(): number | null {
   if (typeof window === "undefined") return null;
@@ -76,12 +138,50 @@ function readFastParam(): boolean {
   return new URLSearchParams(window.location.search).get("fast") === "1";
 }
 
+/** ?mode=tournament → 8-battle gauntlet with rerolls. */
+function readTournamentParam(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("mode") === "tournament";
+}
+
+/** ?naval=1 → coastal +1 range across one hex of water. */
+function readNavalParam(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("naval") === "1";
+}
+
+const HUMAN_COLOR_FALLBACK = "#ffd54f";
+
+function buildBracket(active: boolean, seed: number, color: string): BracketState {
+  const fresh = generateBracket(seed, color);
+  return { ...fresh, active };
+}
+
 export default function PlayPage() {
   const [seed, setSeed] = useState<number>(1);
   const [fastBots, setFastBots] = useState<boolean>(false);
+  const [navalAttacks, setNavalAttacks] = useState<boolean>(false);
+  // matchSeed pins the in-game bot personalities for the current bracket
+  // match. Rerolls only swap `seed` (map + dice RNG); matchSeed stays put,
+  // so the player faces the same opponents on the new map.
+  const [matchSeed, setMatchSeed] = useState<number>(1);
+  const [bracket, setBracket] = useState<BracketState>(() =>
+    buildBracket(false, 1, HUMAN_COLOR_FALLBACK),
+  );
+  const [matchWonEvent, setMatchWonEvent] = useState<MatchWonEvent | null>(null);
+  const [bracketOpen, setBracketOpen] = useState<boolean>(false);
+  const matchWonIdRef = useRef(0);
+  const matchResolvedRef = useRef(false);
+  const autoStartRef = useRef(false);
   useEffect(() => {
-    setSeed(readSeedParam() ?? randomSeed());
+    const initSeed = readSeedParam() ?? randomSeed();
+    setSeed(initSeed);
+    setMatchSeed(initSeed);
     setFastBots(readFastParam());
+    setNavalAttacks(readNavalParam());
+    setBracket(
+      buildBracket(readTournamentParam(), initSeed, HUMAN_COLOR_FALLBACK),
+    );
   }, []);
 
   const initial = useMemo(
@@ -93,10 +193,14 @@ export default function PlayPage() {
         gridWidth: 32,
         gridHeight: 32,
         cellsPerTerritory: 24,
+        navalAttacks,
       }),
-    [seed],
+    [seed, navalAttacks],
   );
-  const weights = useMemo(() => generateWeights(seed, PLAYER_COUNT), [seed]);
+  // Bot personalities are pinned to matchSeed, not the map seed, so rerolling
+  // the map doesn't shuffle the AI lineup mid-match. Outside tournament mode
+  // matchSeed simply follows seed (see the seed-change reset block below).
+  const weights = useMemo(() => generateWeights(matchSeed, PLAYER_COUNT), [matchSeed]);
 
   const opponents = useMemo<Array<Agent | null>>(() => {
     return weights.map((w, i) => {
@@ -111,14 +215,51 @@ export default function PlayPage() {
   // null = follow live tail; otherwise absolute navigable-action index in [0..totalSteps].
   const [viewCount, setViewCount] = useState<number | null>(null);
   const [started, setStarted] = useState<boolean>(false);
+  const [knockoutQueue, setKnockoutQueue] = useState<KnockoutEvent[]>([]);
+  const [endDismissed, setEndDismissed] = useState<boolean>(false);
+  const [reinforceFx, setReinforceFx] = useState<ReinforceEvent | null>(null);
+  const [turnTrigger, setTurnTrigger] = useState<number>(0);
+  const koIdRef = useRef(0);
+  const fxKeyRef = useRef(0);
+  // Snapshot of the viewed state at last effect run, for forward-transition diffs.
+  const snapRef = useRef<{
+    step: number;
+    alive: boolean[];
+    histLen: number;
+    humanTurn: boolean;
+  }>({
+    step: 0,
+    alive: initial.players.map((p) => p.alive),
+    histLen: initial.history.length,
+    humanTurn: false,
+  });
 
-  if (live.seed !== seed) {
+  if (live.seed !== seed || live.navalAttacks !== navalAttacks) {
     setLive(initial);
     setSelected(null);
     setAnimation(null);
     setViewCount(null);
-    setStarted(false);
+    setStarted(autoStartRef.current);
+    autoStartRef.current = false;
+    setKnockoutQueue([]);
+    setEndDismissed(false);
+    setReinforceFx(null);
+    setTurnTrigger(0);
+    matchResolvedRef.current = false;
+    // Outside a tournament, the seed input governs everything — keep matchSeed
+    // synced so weights regenerate with the map.
+    if (!bracket.active && matchSeed !== seed) setMatchSeed(seed);
+    snapRef.current = {
+      step: 0,
+      alive: initial.players.map((p) => p.alive),
+      histLen: initial.history.length,
+      humanTurn: false,
+    };
   }
+
+  const consumeKnockout = useCallback((id: number) => {
+    setKnockoutQueue((q) => q.filter((t) => t.id !== id));
+  }, []);
 
   // Expose state on window for E2E tests (Playwright). Read-only snapshot of
   // the live state plus a programmatic end-turn for the human player so tests
@@ -170,6 +311,180 @@ export default function PlayPage() {
     return state;
   }, [isLive, live, initial, effectiveStep, navigableActions]);
 
+  // Unified FX driver: fires on forward single-step transitions of viewedState.
+  // Covers both live-tail growth and history scrubbing; backward / multi-step
+  // jumps silently re-sync the snapshot without firing FX.
+  useEffect(() => {
+    const prev = snapRef.current;
+    const newAlive = viewedState.players.map((p) => p.alive);
+    const newHistLen = viewedState.history.length;
+    const newHumanTurn =
+      started &&
+      viewedState.currentPlayer === HUMAN &&
+      viewedState.phase === "attack" &&
+      !!viewedState.players[HUMAN]?.alive;
+    const forwardOne = effectiveStep === prev.step + 1;
+
+    if (forwardOne) {
+      // Knockouts: alive[i] flipped true → false since last step.
+      const newEvents: KnockoutEvent[] = [];
+      for (let i = 0; i < newAlive.length; i++) {
+        if (prev.alive[i] && !newAlive[i]) {
+          newEvents.push({
+            id: ++koIdRef.current,
+            playerId: i,
+            color: viewedState.players[i]!.color,
+            isHuman: i === HUMAN,
+          });
+        }
+      }
+      if (newEvents.length > 0) {
+        setKnockoutQueue((q) => [...q, ...newEvents]);
+      }
+
+      // Reinforce: walk history entries appended since last step.
+      for (let i = prev.histLen; i < newHistLen; i++) {
+        const a = viewedState.history[i]!;
+        if (a.kind === "reinforce" && a.player === HUMAN) {
+          const total = a.placements.reduce((s, p) => s + p.added, 0);
+          if (total > 0) {
+            setReinforceFx({
+              count: total,
+              color: viewedState.players[HUMAN]?.color ?? "#ffd54f",
+              key: ++fxKeyRef.current,
+            });
+          }
+        }
+      }
+    }
+
+    // Turn banner: fire on humanTurn false → true regardless of step delta,
+    // so the BEGIN click also produces a sweep when the human is up first.
+    if (newHumanTurn && !prev.humanTurn) {
+      setTurnTrigger((k) => k + 1);
+    }
+
+    snapRef.current = {
+      step: effectiveStep,
+      alive: newAlive,
+      histLen: newHistLen,
+      humanTurn: newHumanTurn,
+    };
+  }, [effectiveStep, viewedState, started]);
+
+  // Reset end-overlay dismissal when the viewer steps off the final state.
+  useEffect(() => {
+    if (viewedState.phase !== "ended") setEndDismissed(false);
+  }, [viewedState.phase]);
+
+  // Bracket: resolve the human's current match the moment its outcome is
+  // decided. Win = only the human remains alive (or live.phase ended with
+  // human winner). Loss = the human is knocked out (bots may still be
+  // fighting, but the human's run is over the moment they're eliminated).
+  useEffect(() => {
+    if (!bracket.active) return;
+    if (!started) return;
+    if (matchResolvedRef.current) return;
+    if (bracket.outcome !== "playing") return;
+
+    const humanAlive = live.players[HUMAN]?.alive ?? false;
+    const aliveCount = live.players.filter((p) => p.alive).length;
+    const humanWon =
+      humanAlive && (live.phase === "ended" || aliveCount === 1);
+    const humanLost = !humanAlive;
+    if (!humanWon && !humanLost) return;
+
+    matchResolvedRef.current = true;
+
+    if (humanLost) {
+      setBracket((b) => applyHumanLoss(b));
+      return;
+    }
+
+    // Match won. Compute the advanced bracket synchronously so the splash can
+    // preview the next opponent before we actually advance the state.
+    const beaten = humanOpponent(bracket);
+    const advanced = applyHumanWin(bracket, seed);
+    const isChampion = advanced.outcome === "champion";
+    const nextOpp = isChampion ? null : humanOpponent(advanced);
+    const beatenColor = beaten?.color ?? "#fff";
+    const humanColor = live.players[HUMAN]?.color ?? HUMAN_COLOR_FALLBACK;
+
+    if (isChampion) {
+      setBracket(advanced);
+      return;
+    }
+
+    setMatchWonEvent({
+      id: ++matchWonIdRef.current,
+      roundLabel: ROUND_LABELS[bracket.currentRound] ?? "Round",
+      beatenOpponentName: beaten?.name ?? "Opponent",
+      beatenOpponentEmblem: beaten?.emblem ?? "?",
+      beatenOpponentColor: beatenColor,
+      nextRoundLabel: ROUND_LABELS[advanced.currentRound] ?? null,
+      nextOpponentName: nextOpp?.name ?? null,
+      nextOpponentEmblem: nextOpp?.emblem ?? null,
+      nextOpponentColor: nextOpp?.color ?? null,
+      color: humanColor,
+    });
+  }, [bracket, started, live, seed]);
+
+  const advanceMatch = useCallback(() => {
+    setMatchWonEvent(null);
+    setBracket((b) => applyHumanWin(b, seed));
+    // Next match starts in the pre-BEGIN state so the player can use rerolls
+    // (or scout the bracket) before committing.
+    autoStartRef.current = false;
+    setMatchSeed(randomSeed());
+    setSeed(randomSeed());
+  }, [seed]);
+
+  const restartTournament = useCallback(() => {
+    const newSeed = randomSeed();
+    setBracket(buildBracket(true, newSeed, HUMAN_COLOR_FALLBACK));
+    setMatchWonEvent(null);
+    autoStartRef.current = false;
+    setMatchSeed(newSeed);
+    setSeed(newSeed);
+  }, []);
+
+  const exitTournament = useCallback(() => {
+    const newSeed = randomSeed();
+    setBracket(buildBracket(false, newSeed, HUMAN_COLOR_FALLBACK));
+    setMatchWonEvent(null);
+    autoStartRef.current = false;
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("mode");
+      window.history.replaceState(null, "", url.toString());
+    }
+    setMatchSeed(newSeed);
+    setSeed(newSeed);
+  }, []);
+
+  // Rerolls are a pre-match decision: scout the map, reroll if you don't like
+  // it, then BEGIN to commit. Once a match is underway, the reroll is locked.
+  const canReroll =
+    bracket.active &&
+    bracket.outcome === "playing" &&
+    !started &&
+    !animation &&
+    isLive &&
+    bracket.rerollsLeft > 0;
+
+  const onReroll = useCallback(() => {
+    if (!canReroll) return;
+    setBracket((b) => ({
+      ...b,
+      rerollsLeft: b.rerollsLeft - 1,
+      rerollsUsed: b.rerollsUsed + 1,
+    }));
+    // Stay in the pre-BEGIN state on the new map so the player can keep
+    // scouting and reroll again if they still don't like the layout.
+    autoStartRef.current = false;
+    setSeed(randomSeed());
+  }, [canReroll]);
+
   const moves = useMemo(() => legalAttacks(viewedState), [viewedState]);
   const legalTargetsFromSelected = useMemo(() => {
     const set = new Set<TerritoryId>();
@@ -204,12 +519,17 @@ export default function PlayPage() {
     setLive(next);
   };
 
-  // Bot driver — only when at live tail and not animating.
+  // Bot driver — only when at live tail, not animating, and no knockout splash
+  // is queued. The splash pauses for animation, so without this gate the bot's
+  // next attack would re-trigger the animation/splash race and the splash would
+  // never get to consume its event.
+  const knockoutPending = knockoutQueue.length > 0;
   const botTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!started) return;
     if (!isLive) return;
     if (animation) return;
+    if (knockoutPending) return;
     if (live.phase !== "attack") return;
     if (live.currentPlayer === HUMAN) return;
     const agent = opponents[live.currentPlayer];
@@ -226,10 +546,10 @@ export default function PlayPage() {
       if (botTimerRef.current) clearTimeout(botTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, animation, opponents, isLive, started]);
+  }, [live, animation, opponents, isLive, started, knockoutPending]);
 
   const onTerritoryClick = (tid: TerritoryId) => {
-    if (animation || !isLive || !started) return;
+    if (animation || !isLive || !started || knockoutPending) return;
     if (live.phase !== "attack") return;
     if (live.currentPlayer !== HUMAN) return;
     const t = live.territories[tid];
@@ -248,7 +568,7 @@ export default function PlayPage() {
   };
 
   const onEndTurn = () => {
-    if (animation || !isLive || !started) return;
+    if (animation || !isLive || !started || knockoutPending) return;
     if (live.currentPlayer !== HUMAN) return;
     setSelected(null);
     setLive(applyEndTurn(live));
@@ -321,19 +641,69 @@ export default function PlayPage() {
   }, [effectiveStep, totalSteps]);
 
   const humanAlive = live.players[HUMAN]?.alive;
-  const winner = live.phase === "ended" ? live.players.find((p) => p.alive) : null;
+  const liveWinner = live.phase === "ended" ? live.players.find((p) => p.alive) ?? null : null;
+  const viewedWinner =
+    viewedState.phase === "ended" ? viewedState.players.find((p) => p.alive) ?? null : null;
+  const showEndOverlay = viewedWinner !== null && !animation && !endDismissed;
+
+  const tournamentEnded =
+    bracket.active && bracket.outcome !== "playing";
+  const showRegularEnd =
+    !bracket.active && showEndOverlay && viewedWinner !== null;
+  const opponent = bracket.active ? humanOpponent(bracket) : null;
+  const totalRounds = bracket.rounds.length;
 
   return (
     <main className="play-shell">
       <div className="topbar">
-        <span style={{ opacity: 0.6, fontSize: "0.85rem" }}>
-          Turn {viewedState.turn} · seed {viewedState.seed}
+        <span className="topbar-info">
+          <span>Turn {viewedState.turn}</span>
+          {!bracket.active && (
+            <>
+              <span aria-hidden>·</span>
+              <label className="seed-label">
+                seed <SeedInput seed={seed} onSubmit={setSeed} />
+              </label>
+            </>
+          )}
           {!isLive && <span className="viewing-history">· Viewing history</span>}
         </span>
-        <button className="btn ghost small" onClick={() => setSeed(randomSeed())}>
-          New game
-        </button>
+        {!bracket.active && (
+          <button className="btn ghost small" onClick={() => setSeed(randomSeed())}>
+            New game
+          </button>
+        )}
       </div>
+
+      {bracket.active && (
+        <>
+          <TournamentBar
+            roundIndex={bracket.currentRound}
+            totalRounds={totalRounds}
+            opponent={opponent}
+            rerollsLeft={bracket.rerollsLeft}
+            maxRerolls={BRACKET_REROLLS_PER_MATCH}
+            canReroll={canReroll}
+            onReroll={onReroll}
+            onQuit={exitTournament}
+          />
+          <div className="tour-bracket-toggle-wrap">
+            <button
+              type="button"
+              className="btn ghost small tour-bracket-toggle"
+              onClick={() => setBracketOpen((v) => !v)}
+              aria-expanded={bracketOpen}
+            >
+              {bracketOpen ? "Hide bracket ▴" : "Show bracket ▾"}
+            </button>
+          </div>
+          {bracketOpen && (
+            <div className="tour-bracket-panel">
+              <BracketView bracket={bracket} />
+            </div>
+          )}
+        </>
+      )}
 
       <div className="game-row">
         <div className="board-wrap">
@@ -345,6 +715,7 @@ export default function PlayPage() {
             animation={animation}
             onAnimationComplete={() => setAnimation(null)}
           />
+          <PlayerBar state={viewedState} />
           {!started && (
             <div className="begin-overlay">
               <button className="btn begin-btn" onClick={() => setStarted(true)}>
@@ -352,11 +723,49 @@ export default function PlayPage() {
               </button>
             </div>
           )}
+          {started && (
+            <>
+              <TurnBanner trigger={turnTrigger} />
+              <ReinforceFx event={reinforceFx} />
+            </>
+          )}
         </div>
         <Legend state={viewedState} weights={weights} humanId={HUMAN} />
       </div>
 
-      <PlayerBar state={viewedState} />
+      <KnockoutSplash
+        queue={knockoutQueue}
+        paused={!!animation}
+        onConsume={consumeKnockout}
+      />
+
+      {bracket.active && (
+        <MatchWonSplash
+          event={matchWonEvent}
+          paused={!!animation || tournamentEnded}
+          onConsume={() => advanceMatch()}
+        />
+      )}
+
+      {showRegularEnd && viewedWinner && (
+        <GameEndOverlay
+          winnerColor={viewedWinner.color}
+          winnerId={viewedWinner.id}
+          isHumanWin={viewedWinner.id === HUMAN}
+          onNewGame={() => setSeed(randomSeed())}
+          onDismiss={() => setEndDismissed(true)}
+        />
+      )}
+
+      {tournamentEnded && (
+        <TournamentEndOverlay
+          outcome={bracket.outcome === "champion" ? "champion" : "eliminated"}
+          bracket={bracket}
+          rerollsUsed={bracket.rerollsUsed}
+          onRestart={restartTournament}
+          onExit={exitTournament}
+        />
+      )}
 
       <HistoryBar
         totalSteps={totalSteps}
@@ -368,10 +777,10 @@ export default function PlayPage() {
       />
 
       <div className="play-controls">
-        {winner !== undefined && winner !== null ? (
+        {liveWinner !== null && !bracket.active ? (
           <>
             <span className="play-banner">
-              {winner.id === HUMAN ? "YOU WIN!" : "GAME OVER"}
+              {liveWinner.id === HUMAN ? "YOU WIN!" : "GAME OVER"}
             </span>
             <button className="btn" onClick={() => setSeed(randomSeed())}>
               New game
@@ -381,7 +790,14 @@ export default function PlayPage() {
           <button
             className="btn"
             onClick={onEndTurn}
-            disabled={!started || !!animation || !isLive || live.currentPlayer !== HUMAN || !humanAlive}
+            disabled={
+              !started ||
+              !!animation ||
+              !isLive ||
+              live.currentPlayer !== HUMAN ||
+              !humanAlive ||
+              live.phase === "ended"
+            }
           >
             END TURN
           </button>
